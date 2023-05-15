@@ -1,0 +1,205 @@
+/*CODE IMPLEMENTED WITH FreeFem++ (documentation and free software available on https://freefem.org/)
+  4-STATE RESTRICTED ACTIVE POTTS MODEL (MPS=1) - VERSION 15/05/2023 - BY MANGEAT MATTHIEU & CHATTERJEE SWARNAJIT (2023)*/
+
+include "getARGV.idp" //Include parameters in command line.
+load "MUMPS" //Load a solver with less errors.
+
+//////////////////////////////
+/// PARAMETERS OF THE CODE ///
+//////////////////////////////
+
+//CPU clock time.
+real cpu=clock();
+
+//Physical parameters (rho0=average density, Pe=Péclet number, epsilon=biased parameter, L=size of the box).
+real rho0=getARGV("-rho0",0.75);
+real Pe=getARGV("-Pe",10.);
+real epsilon=getARGV("-epsilon",2.4);
+real L=getARGV("-L",50);
+
+//Numerical parameters (dt=time increment, tmax=maximal time, Nvert=number of verticles on the boundaries, init=geometry of initial condition, gamma=noise strength).
+//init: 0-> diagonal band 0 | 1-> diagonal band 2 | 2-> square | 3-> disk | 4-> quasi-diagonal band 1 | 5-> quasi-diagonal band 2.
+real dt=getARGV("-dt",0.02);
+real tmax=getARGV("-tmax",1000.);
+int Nvert=getARGV("-N",75);
+int init=getARGV("-init",3);
+real gamma=getARGV("-gamma",0.);
+
+//Coefficients of the equation.
+real Dpara=1+epsilon/3.;
+real Dperp=1-epsilon/3.;
+
+//////////////////////////////
+/// CREATION OF THE DOMAIN ///
+//////////////////////////////
+
+//Definition of the mesh (centered in zero for convenience).
+mesh Th=square(Nvert,Nvert,[(-0.5+x)*L,(-0.5+y)*L]);
+fespace Vh(Th,P1,periodic=[[2,y],[4,y],[1,x],[3,x]]); //Linear piecewise functions + periodic.
+
+//Functions defined on the mesh.
+Vh rhor,rhou,rhol,rhod; //Unknown functions at step n+1.
+Vh RHOR,RHOU,RHOL,RHOD,RHO; //Unkown functions at step n.
+Vh ETAR,ETAU,ETAL,ETAD; //Noise functions at step n.
+Vh vr,vu,vl,vd; //Test-functions at step n+1.
+
+//////////////////
+/// DATA FILES ///
+//////////////////
+
+func int dataFile(real t)
+{
+	system("mkdir -p data_RAPM4_MPS1");
+	ofstream fileRHO("data_RAPM4_MPS1/RAPM4_MPS1_RHO_rho0="+rho0+"_Pe="+Pe+"_epsilon="+epsilon+"_L="+L+"_init="+init+"_gamma="+gamma+"_t="+t+".txt");
+	fileRHO.precision(6);
+	int Nexp=201;
+	for (real Y=-L/2.;Y<=L/2.;Y+=L/Nexp)
+	{
+		for (real X=-L/2.;X<=L/2.;X+=L/Nexp)
+		{
+			fileRHO << RHO(X,Y) << " ";
+		}
+		fileRHO << endl;
+	}
+	return 1;
+}
+
+/////////////////////////
+/// UPDATE NOISE TERM ///
+/////////////////////////
+
+randinit(0);
+
+func real GaussRan()
+{
+	real u1=randreal1();
+	while (u1<1e-10)
+	{
+		u1=randreal1();
+	}
+	real u2=randreal1();
+	return sqrt(-2*log(u1))*cos(2*pi*u2);
+}
+
+func int updateNoise()
+{
+	for (int i=0; i<Vh.ndof; i++)
+	{
+		real eta=gamma*sqrt(0.5*dt);
+		real g1=GaussRan();
+		real g2=GaussRan();
+		real g3=GaussRan();
+		real g4=GaussRan();
+		ETAR[][i]=eta*(g1-g4);
+		ETAU[][i]=eta*(g2-g1);
+		ETAL[][i]=eta*(g3-g2);
+		ETAD[][i]=eta*(g4-g3);
+	}
+	return 1;
+}
+
+/////////////////////////
+/// INITIAL CONDITION ///
+/////////////////////////
+
+//Definition of the Heaviside function Theta.
+func real Theta(real X)
+{
+	if (X==0)
+	{
+		return 0.5;
+	}
+	else
+	{
+		return (abs(X)+X)/(2*X);
+	}
+}
+
+real rhomin=0., rhomax=1.; //Min and max density.
+real Phi=(rho0-rhomin)/(rhomax-rhomin); //Volume fraction of liquid (arbitrary).
+
+//Initial density profile.
+if (init==0)
+{
+	RHO=rhomin+(rhomax-rhomin)*( Theta(L*Phi/2.-abs(y-x)) + Theta(L*Phi/2.-abs(y-x-L)) + Theta(L*Phi/2.-abs(y-x+L)) ); //diagonal band 1.
+}
+else if (init==1)
+{
+	RHO=rhomin+(rhomax-rhomin)*( Theta(L*Phi/2.-abs(y+x)) + Theta(L*Phi/2.-abs(y+x-L)) + Theta(L*Phi/2.-abs(y+x+L)) ); //diagonal band 2.
+}
+else if (init==2)
+{
+	real RPhi=sqrt(Phi*L*L);
+	RHO=rhomin+(rhomax-rhomin)*Theta(RPhi*0.5-abs(x))*Theta(RPhi*0.5-abs(y)); //square.
+}
+else if (init==3)
+{
+	real RPhi=sqrt(Phi*L*L/pi);
+	RHO=rhomin+(rhomax-rhomin)*Theta(RPhi*RPhi-x*x-y*y); //disk.
+}
+else if (init==4)
+{
+	real dH=0.05;
+	RHO=rhomin+(rhomax-rhomin)*( Theta(L*Phi/2.+dH*L*cos(2*pi*(y+x)/L)-abs(y-x)) + Theta(L*Phi/2.+dH*L*cos(2*pi*(y+x)/L)-abs(y-x-L)) + Theta(L*Phi/2.+dH*L*cos(2*pi*(y+x)/L)-abs(y-x+L)) ); //quasi-diagonal band 1 with sinusoidal variation.
+}
+else if (init==5)
+{
+	real dH=0.05;
+	RHO=rhomin+(rhomax-rhomin)*( Theta(L*Phi/2.+dH*L*cos(2*pi*(y-x)/L)-abs(y+x)) + Theta(L*Phi/2.+dH*L*cos(2*pi*(y-x)/L)-abs(y+x-L)) + Theta(L*Phi/2.+dH*L*cos(2*pi*(y-x)/L)-abs(y+x+L)) ); //quasi-diagonal band 2 with sinusoidal variation.
+}
+
+//renormalization of RHO to have the correct average value.
+real norm=int2d(Th)(RHO)/int2d(Th)(1.);
+RHO=rho0*RHO/norm;
+
+RHOR=0.25*RHO;
+RHOU=0.25*RHO;
+RHOL=0.25*RHO;
+RHOD=0.25*RHO;
+
+//Create noise term.
+updateNoise();
+
+////////////////////////////////
+/// EQUATIONS OF THE PROBLEM ///
+////////////////////////////////
+
+//Definition of the RAPM4 problem (MPS=1).
+problem RAPM4mps1([rhor,rhou,rhol,rhod],[vr,vu,vl,vd])=
+	int2d(Th)(rhor*vr + dt*(Dpara*(1-RHO)*dx(rhor)*dx(vr) + Dpara*dx(RHO)*rhor*dx(vr) + Dperp*(1-RHO)*dy(rhor)*dy(vr) + Dperp*dy(RHO)*rhor*dy(vr) - Pe*(1-RHO)*rhor*dx(vr) + (3*rhor-rhou-rhol-rhod)*vr)
+		 +rhou*vu + dt*(Dpara*(1-RHO)*dy(rhou)*dy(vu) + Dpara*dy(RHO)*rhou*dy(vu) + Dperp*(1-RHO)*dx(rhou)*dx(vu) + Dperp*dx(RHO)*rhou*dx(vu) - Pe*(1-RHO)*rhou*dy(vu) + (3*rhou-rhor-rhol-rhod)*vu)
+		 +rhol*vl + dt*(Dpara*(1-RHO)*dx(rhol)*dx(vl) + Dpara*dx(RHO)*rhol*dx(vl) + Dperp*(1-RHO)*dy(rhol)*dy(vl) + Dperp*dy(RHO)*rhol*dy(vl) + Pe*(1-RHO)*rhol*dx(vl) + (3*rhol-rhor-rhou-rhod)*vl)
+		 +rhod*vd + dt*(Dpara*(1-RHO)*dy(rhod)*dy(vd) + Dpara*dy(RHO)*rhod*dy(vd) + Dperp*(1-RHO)*dx(rhod)*dx(vd) + Dperp*dx(RHO)*rhod*dx(vd) + Pe*(1-RHO)*rhod*dy(vd) + (3*rhod-rhor-rhou-rhol)*vd))
+	- int2d(Th)(RHOR*vr + RHOU*vu + RHOL*vl + RHOD*vd)
+	- int2d(Th)(ETAR*vr + ETAU*vu + ETAL*vl + ETAD*vd);
+
+//////////////////////
+/// TIME EVOLUTION ///
+//////////////////////
+
+int Nsteps=int(tmax/dt);
+int texp=0;
+int DT=int(0.2/dt);
+
+for(int t=0;t<=Nsteps+1;t+=1)
+{
+	if (t==texp)
+	{
+		dataFile(t*dt);
+		cout << "t=" << dt*t << " N/V=" << int2d(Th)(RHO)/int2d(Th)(1.) << " Rmin=" << RHO[].min << " Rmax=" << RHO[].max << " -ctime=" << int(clock()-cpu) << "s" << endl;
+		texp+=DT;
+	}
+	
+	//Solve the problem.
+	RAPM4mps1;
+	
+	//Update the densities.
+	RHOR=rhor;	
+	RHOU=rhou;
+	RHOL=rhol;
+	RHOD=rhod;
+	RHO=RHOR+RHOU+RHOL+RHOD;
+	
+	//Update noise.
+	updateNoise();
+}

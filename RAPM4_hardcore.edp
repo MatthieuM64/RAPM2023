@@ -1,0 +1,235 @@
+/*CODE IMPLEMENTED WITH FreeFem++ (documentation and free software available on https://freefem.org/)
+  4-STATE RESTRICTED ACTIVE POTTS MODEL (HARDCORE) - VERSION 15/05/2023 - BY MANGEAT MATTHIEU & CHATTERJEE SWARNAJIT (2023)*/
+
+include "getARGV.idp" //Include parameters in command line.
+load "MUMPS" //Load a solver with less errors.
+
+//////////////////////////////
+/// PARAMETERS OF THE CODE ///
+//////////////////////////////
+
+//CPU clock time.
+real cpu=clock();
+
+//Physical parameters (beta=1/Temperature, rho0=average density, epsilon= biased parameter, MPS=maximal number of particles, L=size of the box).
+real beta=getARGV("-beta",0.75);
+real rho0=getARGV("-rho0",2.);
+real epsilon=getARGV("-epsilon",2.7);
+real MPS=getARGV("-MPS",5);
+real L=getARGV("-L",50);
+
+//Numerical parameters (dt=time increment, tmax=maximal time, Nvert=number of verticles on the boundaries, init=geometry of initial condition, gamma=noise strength).
+//init: 0-> y-independent initial condition | 1-> x-independent initial condition | 2-> square of liquid inside the gas | 3-> disk of liquid inside the gas | 4-> quasi-vertical band | 5-> quasi-horizontal band.
+real dt=getARGV("-dt",0.02);
+real tmax=getARGV("-tmax",1000.);
+int Nvert=getARGV("-N",75);
+int init=getARGV("-init",3);
+real gamma=getARGV("-gamma",0.);
+
+//Coefficients of the equation.
+real D=1.,r=1., J=1.;
+real Dpara=D*(1+epsilon/3.);
+real Dperp=D*(1-epsilon/3.);
+real v=4*D*epsilon/3.;
+real alpha=8*beta*J*beta*J*(1-2*beta*J/3.);
+real rhos=4/3.;
+real s=1./MPS;
+
+//////////////////////////////
+/// CREATION OF THE DOMAIN ///
+//////////////////////////////
+
+//Definition of the mesh (centered in zero for convenience).
+mesh Th=square(Nvert,Nvert,[(-0.5+x)*L,(-0.5+y)*L]);
+fespace Vh(Th,P1,periodic=[[2,y],[4,y],[1,x],[3,x]]); //Linear piecewise functions + periodic.
+
+//Functions defined on the mesh.
+Vh rhor,rhou,rhol,rhod; //Unknown functions at step n+1.
+Vh RHOR,RHOU,RHOL,RHOD,RHO,M0; //Unkown functions at step n.
+Vh ETAR,ETAU,ETAL,ETAD; //Noise functions at step n.
+Vh vr,vu,vl,vd; //Test-functions at step n+1.
+Vh Krl, Kru, Krd, Klu, Kld, Kud; //Flipping terms.
+
+//////////////////
+/// DATA FILES ///
+//////////////////
+
+func int dataFile(real t)
+{
+	system("mkdir -p data_RAPM4_hardcore/");
+	ofstream fileRHO("data_RAPM4_hardcore/RAPM4_hardcore_RHO_beta="+beta+"_rho0="+rho0+"_epsilon="+epsilon+"_MPS="+MPS+"_L="+L+"_init="+init+"_gamma="+gamma+"_t="+t+".txt");
+	ofstream fileMAG("data_RAPM4_hardcore/RAPM4_hardcore_MAG_beta="+beta+"_rho0="+rho0+"_epsilon="+epsilon+"_MPS="+MPS+"_L="+L+"_init="+init+"_gamma="+gamma+"_t="+t+".txt");
+	fileRHO.precision(6);
+	fileMAG.precision(6);
+	int Nexp=201;
+	for (real Y=-L/2.;Y<=L/2.;Y+=L/Nexp)
+	{
+		for (real X=-L/2.;X<=L/2.;X+=L/Nexp)
+		{
+			fileRHO << RHO(X,Y) << " ";
+			fileMAG << M0(X,Y) << " ";
+		}
+		fileRHO << endl;
+		fileMAG << endl;
+	}
+	return 1;
+}
+
+/////////////////////////
+/// UPDATE NOISE TERM ///
+/////////////////////////
+
+randinit(0);
+
+func real GaussRan()
+{
+	real u1=randreal1();
+	while (u1<1e-10)
+	{
+		u1=randreal1();
+	}
+	real u2=randreal1();
+	return sqrt(-2*log(u1))*cos(2*pi*u2);
+}
+
+func int updateNoise()
+{
+	for (int i=0; i<Vh.ndof; i++)
+	{
+		real eta=gamma*sqrt(0.5*dt);
+		real g1=GaussRan();
+		real g2=GaussRan();
+		real g3=GaussRan();
+		real g4=GaussRan();
+		ETAR[][i]=eta*(g1-g4);
+		ETAU[][i]=eta*(g2-g1);
+		ETAL[][i]=eta*(g3-g2);
+		ETAD[][i]=eta*(g4-g3);
+	}
+	return 1;
+}
+
+/////////////////////////
+/// INITIAL CONDITION ///
+/////////////////////////
+
+//Definition of the Heaviside function Theta.
+func real Theta(real X)
+{
+        if (X==0)
+        {
+                return 0.5;
+        }
+        else
+        {
+                return (abs(X)+X)/(2*X);
+        }
+}
+
+real rhomin=0.5, rhomax=3.5; //Min and max density.
+real Phi=(rho0-rhomin)/(rhomax-rhomin); //Volume fraction of liquid (arbitrary).
+
+//Initial density profile.
+if (init==0)
+{
+	RHO=rhomin+(rhomax-rhomin)*Theta(L*Phi/2.-abs(x)); //y-independent initial condition (vertical band).
+}
+else if (init==1)
+{
+	RHO=rhomin+(rhomax-rhomin)*Theta(L*Phi/2.-abs(y)); //x-independent initial condition (horizontal band).
+}
+else if (init==2)
+{
+	real RPhi=sqrt(Phi*L*L);
+	RHO=rhomin+(rhomax-rhomin)*Theta(RPhi*0.5-abs(x))*Theta(RPhi*0.5-abs(y)); //square of liquid inside the gas.
+}
+else if (init==3)
+{
+	real RPhi=sqrt(Phi*L*L/pi);
+	RHO=rhomin+(rhomax-rhomin)*Theta(RPhi*RPhi-x*x-y*y); //disk  of liquid inside the gas.
+}
+else if (init==4)
+{
+	real dH=0.02;
+	RHO=rhomin+(rhomax-rhomin)*Theta(L*Phi/2.+dH*L*cos(2*pi*y/L)-abs(x)); //quasi-vertical band with sinusoidal variation.
+}
+else if (init==5)
+{
+	real dH=0.02;
+	RHO=rhomin+(rhomax-rhomin)*Theta(L*Phi/2.+dH*L*cos(2*pi*x/L)-abs(y)); //quasi-horizontal band with sinusoidal variation.
+}
+
+//renormalization of RHO to have the correct average value.
+real norm=int2d(Th)(RHO)/int2d(Th)(1.);
+RHO=rho0*RHO/norm;
+//Magnetization: liquid on gas, depending on the sign of rho-rhos.
+M0=Theta(RHO-rhos);
+
+RHOR=RHO*M0*Theta(-x)+0.25*RHO*(1-M0);
+RHOL=RHO*M0*Theta(x) +0.25*RHO*(1-M0);
+RHOU=0.25*RHO*(1-M0);
+RHOD=0.25*RHO*(1-M0);
+
+//Create noise term.
+updateNoise();
+
+////////////////////////////////
+/// EQUATIONS OF THE PROBLEM ///
+////////////////////////////////
+
+//Definition of the K_{ji}.
+func real K(real RJ, real RI)
+{
+	return (4*beta*J*(RJ+RI)/RHO-1.-r/RHO-alpha*(RJ-RI)*(RJ-RI)/(RHO*RHO));
+}
+
+//Definition of the RAPM4 problem (HARDCORE).
+problem RAPM4hc([rhor,rhol,rhou,rhod],[vr,vl,vu,vd],solver=sparsesolver)=
+	int2d(Th)(rhor*vr + rhou*vu + rhol*vl + rhod*vd	
+		+ dt*(	  Dpara*((1-s*RHO)*dx(rhor)*dx(vr) + s*dx(RHO)*rhor*dx(vr)) + Dperp*((1-s*RHO)*dy(rhor)*dy(vr) + s*dy(RHO)*rhor*dy(vr)) - v*(1-s*RHO)*rhor*dx(vr) 
+			+ Dpara*((1-s*RHO)*dy(rhou)*dy(vu) + s*dy(RHO)*rhou*dy(vu)) + Dperp*((1-s*RHO)*dx(rhou)*dx(vu) + s*dx(RHO)*rhou*dx(vu)) - v*(1-s*RHO)*rhou*dy(vu)
+			+ Dpara*((1-s*RHO)*dx(rhol)*dx(vl) + s*dx(RHO)*rhol*dx(vl)) + Dperp*((1-s*RHO)*dy(rhol)*dy(vl) + s*dy(RHO)*rhol*dy(vl)) + v*(1-s*RHO)*rhol*dx(vl)
+			+ Dpara*((1-s*RHO)*dy(rhod)*dy(vd) + s*dy(RHO)*rhod*dy(vd)) + Dperp*((1-s*RHO)*dx(rhod)*dx(vd) + s*dx(RHO)*rhod*dx(vd)) + v*(1-s*RHO)*rhod*dy(vd) )
+		- dt*(Krl*(rhor-rhol)*(vr-vl) + Kru*(rhor-rhou)*(vr-vu) + Krd*(rhor-rhod)*(vr-vd) + Klu*(rhol-rhou)*(vl-vu) + Kld*(rhol-rhod)*(vl-vd) + Kud*(rhou-rhod)*(vu-vd)))
+	- int2d(Th)(RHOR*vr + RHOU*vu + RHOL*vl + RHOD*vd)
+	- int2d(Th)(ETAR*vr + ETAU*vu + ETAL*vl + ETAD*vd);
+	
+//////////////////////
+/// TIME EVOLUTION ///
+//////////////////////
+
+int Nsteps=int(tmax/dt);
+int texp=0;
+int DT=int(0.2/dt);
+
+for(int t=0;t<=Nsteps+1;t+=1)
+{
+	if (t==texp)
+	{
+		M0=(4*RHOR-RHO)/3.;
+		dataFile(t*dt);
+		cout << "t=" << t*dt << " " << "N/V=" << int2d(Th)(RHO)/int2d(Th)(1.) << " Rmin=" << RHO[].min << " Rmax=" << RHO[].max << " Mmin=" << M0[].min << " Mmax=" << M0[].max << " -ctime=" << int(clock()-cpu) << "s" << endl;
+		texp+=DT;
+	}
+	
+	//Calculate the flipping terms.
+	Krl=K(RHOR,RHOL);
+	Kru=K(RHOR,RHOU);
+	Krd=K(RHOR,RHOD);
+	Klu=K(RHOL,RHOU);
+	Kld=K(RHOL,RHOD);
+	Kud=K(RHOU,RHOD);
+	
+	//Solve RAPM4 equations.
+	RAPM4hc;
+	
+	//Replace the values of old functions.
+	RHOR=rhor;	
+	RHOU=rhou;
+	RHOL=rhol;
+	RHOD=rhod;
+	RHO=RHOR+RHOU+RHOL+RHOD;
+	
+	//Update noise.
+	updateNoise();
+}
