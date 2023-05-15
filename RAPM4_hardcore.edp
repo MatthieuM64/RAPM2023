@@ -32,7 +32,7 @@ real Dpara=D*(1+epsilon/3.);
 real Dperp=D*(1-epsilon/3.);
 real v=4*D*epsilon/3.;
 real alpha=8*beta*J*beta*J*(1-2*beta*J/3.);
-real rhos=4/3.;
+real rhos=8*(1-2*beta*J/3)*r/(1+8*(2*beta*J-1)*(1-2*beta*J/3));
 real s=1./MPS;
 
 //////////////////////////////
