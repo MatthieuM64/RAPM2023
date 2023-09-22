@@ -1,7 +1,7 @@
 # Restricted active Potts model
 
-Codes used in the scientific publications:</br>
-M. Karmakar, S. Chatterjee, M. Mangeat, H. Rieger, and R. Paul, <i><a href='https://link.aps.org/doi/10.1103/PhysRevE.108.014604'>Jamming and flocking in the restricted active Potts model</a></i>, Phys. Rev. E 108, 014604 (2023). Preprint available on arXiv: https://arxiv.org/abs/2212.10251.
+Codes used in the scientific publication:</br>
+M. Karmakar, S. Chatterjee, M. Mangeat, H. Rieger, and R. Paul, <i><a href='https://link.aps.org/doi/10.1103/PhysRevE.108.014604' target='_blank'>Jamming and flocking in the restricted active Potts model</a></i>, Phys. Rev. E 108, 014604 (2023). Preprint available on arXiv: https://arxiv.org/abs/2212.10251.
 
 <b>MPS=1</b></br>
 FreeFem++ code (https://freefem.org/) for MPS=1 hardcore restriction in the 4-state active Potts model.</br>
