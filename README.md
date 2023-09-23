@@ -1,4 +1,5 @@
 # Restricted active Potts model
+<a href="https://dx.doi.org/10.5281/zenodo.7942534"><img src="https://zenodo.org/badge/399397571.svg" alt="DOI"></a>
 
 Codes used in the scientific publication:</br>
 M. Karmakar, S. Chatterjee, M. Mangeat, H. Rieger, and R. Paul, <i><a href='https://journals.aps.org/pre/abstract/10.1103/PhysRevE.108.014604'>Jamming and flocking in the restricted active Potts model</a></i>, Phys. Rev. E 108, 014604 (2023). Preprint available on <a href='https://arxiv.org/abs/2212.10251'>arXiv</a>.
